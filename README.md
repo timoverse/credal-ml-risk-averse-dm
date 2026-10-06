@@ -1,6 +1,4 @@
-# credal-ml-risk-averse-dm
-
-Code for "Credal Prediction in Risk-Averse Settings".
+# Credal Machine Learning for Risk-Averse Decision Making
 
 ## Setup
 
