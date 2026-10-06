@@ -1,0 +1,17 @@
+# @package method
+name: "credal_dro"
+params:
+  # Matches credal_wrapper's default so ensemble-size-matched comparisons are the default.
+  # The paper's headline table uses 20 with ablations at 5/10/15; override via
+  # method.params.num_members.
+  num_members: 10
+  reset_params: true
+train:
+  # Global worst-case DRO level delta_G of CreDRO (Wang et al., ICML 2026,
+  # arXiv:2602.08470). Member i of M (0-indexed) trains each batch on only its
+  # top floor(delta_i * batch_size) highest-CE-loss samples, with
+  # delta_i = delta_G + (1 - delta_G) * i / (M - 1), i.e. uniform over [delta_G, 1]
+  # (their Eq. 8); the last member is plain ERM. The paper recommends
+  # delta_G in [0.5, 1) and defaults to 0.5. Goes into the artifact name as
+  # credal_dro_deltag<d>_<base_model>_<dataset>_seed<s>.
+  delta_g: 0.5

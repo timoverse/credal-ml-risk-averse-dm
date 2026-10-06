@@ -1,0 +1,9 @@
+# @package method
+name: "sqwash"
+train:
+  # superquantile_tail_fraction passed to sqwash.SuperquantileReducer. Per-batch CE losses
+  # are reduced by the mean of the worst (alpha * batch_size) elements instead of the full
+  # mean. alpha=1.0 recovers standard ERM (mean), alpha->0 approaches the max-loss objective.
+  # Set via Hydra (multirun-friendly): method.train.alpha=0.1,0.5. Goes into the
+  # artifact name as sqwash_alpha<a>_<base_model>_<dataset>_seed<s>.
+  alpha: 0.5

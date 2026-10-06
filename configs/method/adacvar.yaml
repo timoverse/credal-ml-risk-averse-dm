@@ -1,0 +1,14 @@
+# @package method
+name: "adacvar"
+train:
+  # CVaR tail fraction. Sets k = ceil(alpha * N) in the Exp3Sampler. alpha=1 recovers
+  # ERM (uniform sampling); smaller alpha targets the tail harder. Set via Hydra
+  # (multirun-friendly): method.train.alpha=0.1,0.5. Goes into the artifact name as
+  # adacvar_alpha<a>_<base_model>_<dataset>_seed<s>.
+  alpha: 0.5
+params:
+  # EG learning rate for the Exp3 sampler. null uses the paper's default
+  # sqrt((1/alpha) * log(1/alpha) / T), with T = epochs * floor(N / batch_size).
+  eta: null
+  # Uniform-mixing coefficient for the marginals: (1 - gamma) * lambda + gamma * (k/N).
+  gamma: 0.0

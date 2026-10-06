@@ -1,0 +1,37 @@
+defaults:
+  - _self_
+  - method: ???   # method=<base|credal_wrapper|credal_relative_likelihood|credal_ensembling|efficient_credal_prediction|...>
+  - recipe: ???   # recipe=<cifar10_resnet18|...>
+
+seed: 1
+
+# For dataset=cifar10, the six OOD sets of OpenOOD's CIFAR-10 benchmark: cifar100 and tin
+# (TinyImageNet) are its near-OOD pair, mnist, svhn, textures and places365 its far-OOD sets.
+# For dataset=bloodmnist, the same structure over MedMNIST: pathmnist and tissuemnist are the
+# near-OOD pair, dermamnist, retinamnist, octmnist and breastmnist the far-OOD sets.
+ood_dataset: "cifar100"
+
+# Repo naming convention:
+# decomposition is a free-form label, component selects the notion of uncertainty.
+decomposition: "entropy"
+# Which per-instance uncertainty to score with:
+#   total / aleatoric / epistemic -- the credal entropy decomposition (upper/lower entropy) via
+#     probly's quantify. For method=base, only "total" exists.
+#   size -- mean credal interval width (the set-extent / nonspecificity score; any credal method).
+#   leverage -- the alpha-free negated evidence mass; credal_rl_multinomial only.
+# For size/leverage, decomposition is only a label in the summary key; "set" is a sensible choice.
+component: "epistemic"
+
+# Metric spec passed straight to probly.evaluation.ood.evaluate_ood.
+# "all" -> {auroc, aupr, fpr@0.95}; pass a list for custom thresholds.
+metrics: "all"
+
+amp: true
+
+# Device override: "cuda:0", "cpu", "mps", or null to auto-pick.
+device: null
+
+wandb:
+  enabled: true
+  entity: "risk-averse"
+  project: "paper"

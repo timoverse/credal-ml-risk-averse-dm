@@ -1,0 +1,12 @@
+# @package method
+name: "credal_relative_likelihood"
+params:
+  num_members: 10
+  reset_params: true
+  tobias_value: 100
+train:
+  # Relative-likelihood threshold for the lowest-RL member.
+  alpha: 0.8
+  # If true, check the relative likelihood after every batch (early stop within an epoch).
+  # If false, check only at the end of each epoch.
+  batch_check: false

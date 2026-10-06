@@ -1,0 +1,37 @@
+# @package _global_
+# PathMNIST + ResNet-18: hyperparameters mirror the MedMNIST v2 baseline
+# (Yang et al., 2023, arXiv:2110.14795) -- Adam(lr=1e-3) with MultiStepLR
+# at 50%/75% of epochs, gamma=0.1, batch_size=128, 100 epochs, no augmentation.
+# Same settings as bloodmnist_resnet18, but 89996 training images rather than
+# 11959, so a base run is about 7.5x the wall-clock.
+#
+# NOTE ON THE SPLITS. PathMNIST trains on patches from NCT-CRC-HE-100K and tests on
+# CRC-VAL-HE-7K, which comes from a DIFFERENT clinical center. The test set is therefore
+# already mildly shifted relative to training, unlike the other MedMNIST recipes here whose
+# splits are random draws from one source. That inflates in-distribution uncertainty and so
+# depresses OOD AUROC; it is a property of the benchmark, not of any method.
+dataset: "pathmnist"
+base_model: "resnet18"
+model_type: "logit_classifier"
+pretrained: false
+epochs: 100
+batch_size: 128
+num_workers: 8
+pin_memory: true
+persistent_workers: true
+val_split: 0.1  # > 0 toggles use of PathMNIST's built-in val split (size fixed by dataset).
+num_train: null
+
+optimizer:
+  name: "adam"
+  params:
+    lr: 0.001
+
+scheduler:
+  name: "multistep"
+  params:
+    milestones: [50, 75]
+    gamma: 0.1
+
+early_stopping:
+  patience: 0

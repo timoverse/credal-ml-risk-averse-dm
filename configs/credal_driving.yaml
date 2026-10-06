@@ -1,0 +1,69 @@
+# Credal hazardous road (offline RL): plan from a fixed under-sampled dataset with value iteration.
+# One sweep per setting: uv run python src/experiments/credal_driving_curve.py --setting <name>
+#
+# Headline curve per setting: crash rate / mean reward / CVaR reward vs hazard observations, 5 agents.
+# THREE value-iteration agents (per-cell crash belief): mle=p_mle; aleatoric_cvar/CeSoR=min(1,p_mle/beta);
+# credal_minimax=p_high. TWO reward-CVaR-minimax agents (cvar_agent.py, budget-augmented value
+# iteration): cvar_minimax plans against the worst-case credal prob p_high, cvar_mle against the single
+# MLE distribution p_mle.
+# Tuned EV-GOOD regime everywhere: the hazardous shortcut is worth it on average but tail-risky. MLE
+# always takes it (best mean, worst CVaR); credal_minimax avoids while under-observed then ALIGNS WITH
+# THE MLE; aleatoric/cvar_mle cross at low data then avoid; cvar_minimax always detours.
+seed: 0                    # base seed; run uses seed+s for s in range(n_seeds)
+
+eval:
+  n_episodes: 1000         # test-time rollouts of each final policy under the true hazard
+
+settings:
+  # Main-paper setting: the original small map, 4-action car. Values verbatim from the pre-settings
+  # config, so the published figure is reproducible.
+  default:
+    world: default
+    n_seeds: 150
+    n_case: 500             # every non-hazard cell well observed -> its p_high ~ 0 (no detour funnel)
+    alpha: 0.15             # credal-set width (ONLY affects credal); controls how much data credal
+                            # needs before p_high drops below q* and it aligns with the MLE.
+    p_hazard: 0.1           # true crash probability of each hazard cell
+    step_cost: 1.0
+    goal_reward: 40.0       # EV-good but tail-risky: shortcut EV ~20 > detour EV 14; EV flip ~0.17 > p
+    crash_penalty: 8.0      # tail gentle enough that ours (detour) keeps ~70% of MLE's mean reward
+    beta: 0.1               # CVaR tail level for the aleatoric agent's belief min(1, p_mle/beta)
+    gamma: 1.0              # undiscounted episodic SSP (terminal goal/crash, positive step cost)
+    s_max: null             # CVaR route-length cap; null = number of free cells (exact, small map)
+    # ~log-equidistant sweep over the evidence window k*p in [0.1, 5]: expected observed crashes
+    # per hazard cell. Both settings sweep the SAME evidence window so the mean-over-k summary
+    # bars are comparable across scenarios (k*p is what the point-estimate baselines react to).
+    k_hazard_values: [1, 2, 3, 4, 6, 8, 13, 20, 30, 40, 50]
+    snapshot_k: [1, 4, 8, 20]  # hazard-observation counts at which to store road route snapshots
+    # reward-CVaR agents: the VaR threshold v is calibrated on a disjoint hold-out to minimise the
+    # realised population CVaR of the reward.
+    cvar_holdout_seeds: 20
+    cvar_num_grid: 20          # grid points for the hold-out v calibration
+    plot_path: "plots/credal_driving_curve.pdf"
+
+  # Appendix setting 1: 100x120 world, 8-action car (diagonals), two blob-shaped mountains with a
+  # hazardous pass between them; the safe detour goes around the smaller LEFT mountain. Shortcut
+  # 91 steps, left detour ~137 steps (premium ~46 steps), right detour ~155 steps.
+  twin_peaks:
+    world: twin_peaks
+    n_seeds: 30             # tuning budget; crank to 150 for the final run
+    n_case: 10000           # the detour is ~137 cells; per-cell residual p_high ~ 1.9/n_case must
+                            # keep the credal belief of crashing ANYWHERE on the detour small (~3%)
+    alpha: 0.15
+    p_hazard: 0.012         # 12 hazard rows -> traverse crash prob 1-(1-p)^12 ~ 13.5% (> beta)
+    step_cost: 1.0
+    goal_reward: 300.0      # must exceed the ~137-step detour cost so reaching the goal is worth it
+    crash_penalty: 40.0     # EV-good: E[crash loss] ~ 0.135*(300+40) ~ 46 <= 46-step detour premium
+    beta: 0.1
+    gamma: 1.0              # undiscounted SSP: gamma<1 would distort the 91- vs ~137-step comparison
+    s_max: 350              # ~2.5x the detour length; optimal routes are far shorter
+    # the default sweep's evidence window k*p in [0.1, 5] mapped to this world's p=0.012:
+    # k = default grid * (0.1 / 0.012), so the mean-over-k bars compare fairly across scenarios.
+    # k=1 is prepended so the plot starts at one single observation (slightly below the shared
+    # window; one point out of twelve barely moves the mean). Two grid points are nudged to the
+    # figure's snapshot anchors (108 -> 90, 417 -> 400) -- log-uniformity is preserved.
+    k_hazard_values: [1, 8, 17, 25, 33, 50, 67, 90, 167, 250, 333, 400]
+    snapshot_k: [1, 8, 67, 90, 167, 400]  # store extra candidates; the figure picks three
+    cvar_holdout_seeds: 10  # calibration is the big world's hot loop; 10x15 keeps runs tractable
+    cvar_num_grid: 15
+    plot_path: "plots/credal_driving_twin_peaks.pdf"

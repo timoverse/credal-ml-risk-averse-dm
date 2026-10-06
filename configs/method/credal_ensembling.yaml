@@ -1,0 +1,5 @@
+# @package method
+name: "credal_ensembling"
+params:
+  num_members: 10
+  reset_params: true

@@ -1,0 +1,30 @@
+# @package _global_
+# BloodMNIST + ResNet-18: hyperparameters mirror the MedMNIST v2 baseline
+# (Yang et al., 2021, arXiv:2110.14795) -- Adam(lr=1e-3) with MultiStepLR
+# at 50%/75% of epochs, gamma=0.1, batch_size=128, 100 epochs, no augmentation.
+# 11959 train images, 8-way blood cell classification (RGB microscope images).
+dataset: "bloodmnist"
+base_model: "resnet18"
+model_type: "logit_classifier"
+pretrained: false
+epochs: 100
+batch_size: 128
+num_workers: 8
+pin_memory: true
+persistent_workers: true
+val_split: 0.1  # > 0 toggles use of BloodMNIST's built-in val split (size fixed by dataset).
+num_train: null
+
+optimizer:
+  name: "adam"
+  params:
+    lr: 0.001
+
+scheduler:
+  name: "multistep"
+  params:
+    milestones: [50, 75]
+    gamma: 0.1
+
+early_stopping:
+  patience: 0

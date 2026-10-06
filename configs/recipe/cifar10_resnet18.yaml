@@ -1,0 +1,25 @@
+# @package _global_
+dataset: "cifar10"
+base_model: "resnet18"
+model_type: "logit_classifier"
+pretrained: false
+epochs: 200
+batch_size: 128
+num_workers: 8
+pin_memory: true
+persistent_workers: true
+val_split: 0.1
+num_train: null  # optional: subsample the training split to this many examples (after val split)
+
+optimizer:
+  name: "sgd"
+  params:
+    lr: 0.1
+    momentum: 0.9
+    weight_decay: 5e-4
+
+scheduler:
+  name: "cosine"
+
+early_stopping:
+  patience: 0  # set > 0 to enable

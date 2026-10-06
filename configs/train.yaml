@@ -1,0 +1,32 @@
+defaults:
+  - _self_
+  - method: ???   # user must specify a method (e.g. method=base)
+  - recipe: ???   # user must specify a recipe (e.g. recipe=cifar10_resnet18)
+
+seed: 1
+
+wandb:
+  enabled: true
+  entity: "risk-averse"
+  project: "paper"
+
+# Models are always logged as W&B artifacts (a no-op when wandb.enabled is false). If true, also
+# save a .pt to CHECKPOINTS_PATH, named <artifact_name>.pt -- the same name the W&B artifact gets.
+# Set this true for offline runs: it is the ONLY thing that persists a model when wandb is
+# disabled, and artifact_source=local reads exactly these files back.
+save_to_disk: false
+
+# Where the training routines that reuse an already-trained model (efficient_credal_prediction and
+# the other base-predictor reusers; credal_ensembling's wrapper reuse) look that model up.
+# "wandb" downloads the artifact, "local" reads CHECKPOINTS_PATH. Must be "local" for an offline
+# sweep, and the sweep must then train `base` before anything that reuses it.
+artifact_source: "wandb"
+
+grad_clip_norm: 1.0
+amp: true
+# Compile model.forward via torch.compile. Disable for fast-iter debugging or on MPS.
+compile_forward: true
+
+# Optional device override: "cuda:0", "cuda:1", "cpu", "mps", or null to auto-pick
+# (least-utilized cuda -> mps -> cpu).
+device: null

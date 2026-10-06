@@ -1,0 +1,64 @@
+# @package method
+name: "credal_rl_multinomial"
+params:
+  # Tikhonov ridge on the whitening covariance of the L2-normalised features, as a fraction of its
+  # mean diagonal (deep-feature covariances are ill-conditioned; the ridge keeps the inverse well
+  # behaved).
+  ridge: 0.01
+  # Kernel bandwidth as a multiple of the median self-excluded nearest neighbour distance of the
+  # reference. Smaller multiples localise the evidence (sharper OOD detection, more conservative
+  # sets: around 0.25 to 0.35 the evidence mass ranking is sharpest but a sizable clean fraction
+  # goes vacuous); 0.55 is the size-calibrated operating point where clean sets are informative and
+  # detection gives up about 0.002 AUROC.
+  bandwidth_mult: 0.55
+  # Number of nearest reference points the kernel is evaluated on. Pure truncation: the Gaussian
+  # kernel tail beyond the nearest few hundred points is zero to machine precision -- but ONLY while
+  # 200 is a small fraction of the reference. At 14815 training points it is 1.3%; at 1482 it is
+  # 13.5% and the claim no longer holds. See bandwidth_anchor.
+  num_neighbors: 200
+  # Which self-excluded neighbour rank the bandwidth base is measured at.
+  #   1              the median distance to the NEAREST other reference point (the legacy scale;
+  #                  every artifact trained so far used it, and it stays the default so they remain
+  #                  bitwise reproducible).
+  #   neighborhood   the median distance to the num_neighbors-th other point, i.e. the radius that
+  #                  actually contains the window the kernel sums over.
+  #
+  # WHY IT EXISTS. compute_evidence sums the kernel over num_neighbors points, but with anchor 1 the
+  # SCALE of that kernel is set by how close the single closest point is. The two decouple as soon as
+  # the reference thins: the radius containing 200 points grows, while the 1-NN distance is nearly
+  # invariant in 2048-d features (and is further flattened by near-duplicate images of one patient).
+  # Because a neighbour contributes exp(-d^2 / 2h^2), the decoupling is exponential. Measured on
+  # covid_xray: cutting training data to 10% (14815 -> 1482 points) moved the base only 50.8 -> 48.8,
+  # yet the evidence mass fell past the vacuity cutoff, so EVERY credal set became the unit box while
+  # the kernel vote stayed accurate (0.916 vs 0.921). The sets carried no information at all.
+  #
+  # NOT a per-query adaptive bandwidth. The scale must follow the SIZE OF THE REFERENCE (a global
+  # property of the fit) and never the local density at a query: the collected mass IS the epistemic
+  # signal here -- it sets the credal radius -log(alpha)/mass -- so normalising it away per query
+  # would give every instance an identical width and delete the method.
+  #
+  # NAMING TRAP: this lives under method.params, which resolve_artifact_name IGNORES. A refit with a
+  # different anchor therefore resolves to the SAME artifact name and would publish a new version
+  # over the existing fit. Pass +method.artifact_tag=... (as the bandwidth sweep does) whenever you
+  # change it, and declare the same tag on the evaluating config's arm.
+  bandwidth_anchor: 1
+  # Whitening exponent gamma on the ridged tied covariance: 1.0 is full Mahalanobis whitening
+  # (sharpest far-OOD detection; bit-compatible with artifacts trained before this parameter),
+  # 0.0 plain normalised distances (immune to whitening-induced hubness), values between
+  # interpolate. auto descends 1.0, 0.75, 0.5, 0.25, 0.0 at fit time and keeps the largest
+  # exponent whose leave-one-out kernel vote on the reference is healthy (share and accuracy
+  # margins against the exponent-zero vote) -- the hub-collapse guard that caught dermamnist and
+  # covid_xray. The chosen exponent is logged and stored in the artifact (whitening_gamma).
+  whitening: auto
+train:
+  # Relative-likelihood level of the multinomial cut. The credal set is the reverse-KL ball around
+  # the kernel vote with radius -log(alpha) divided by the local evidence mass: alpha = 1 gives the
+  # point mass at the vote, alpha -> 0 the vacuous simplex, and points with no effective evidence
+  # are vacuous at every alpha.
+  alpha: 0.8
+  # Optional reference compression, applied at fit time (train-only knob): k-means this many
+  # landmarks in the whitened space, each carrying its cluster's class histogram, instead of
+  # storing the raw training features. Measured on cifar10
+  # seed 1: 4096 landmarks cost about 0.003 evidence-mass AUROC versus the full reference
+  # (saturated by 4096; 8192 gains nothing). null stores the full reference.
+  reference_landmarks: null

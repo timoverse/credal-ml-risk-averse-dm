@@ -1,0 +1,44 @@
+defaults:
+  - _self_
+  - method: ???
+  - recipe: ???
+
+seed: 1
+
+# Per-instance loss: key from src/metrics.py:PER_INSTANCE_LOSS_REGISTRY.
+loss: "log_loss"
+# Aggregations reported per (corruption, severity) cell: keys from src/metrics.py:AGGREGATION_REGISTRY.
+# The mean and one CVaR level cover "average" and "risk-averse tail" behaviour under shift.
+#aggregations: ["mean", "cvar_0.1", "cvar_0.05"]
+aggregations: ["mean"]
+# Decision rule reducing the credal set / model to a single distribution per instance.
+# See src/decision_rules.py:SUPPORTED_DECISION_RULES (minimax, barycenter, mle, cvar_minimax).
+decision_rule: "minimax"
+# Calibration level for decision_rule=cvar_minimax, calibrated once on the clean validation split
+# and then applied to every shifted cell. Required when decision_rule=cvar_minimax, else null.
+cvar_beta: null
+
+# Distribution shift sweep over the dataset's corruption benchmark (CIFAR-10-C or MedMNIST-C, see
+# src/data.py:SHIFT_CORRUPTIONS). corruptions: "all" (or null) sweeps the benchmark set; a
+# list of names (e.g. [gaussian_noise,fog,contrast]) runs that subset. include_clean adds a
+# severity-0 clean baseline via the ordinary clean test set.
+corruptions: "all"
+severities: [1, 2, 3, 4, 5]
+include_clean: true
+
+# Batch size for the evaluation passes, independent of the recipe's training batch_size. For
+# probability-interval methods every per-batch stage of this sweep acts per instance (the
+# representer bounds, the maxent element, the solver), so this is a throughput knob only and
+# leaves results bit for bit unchanged; large batches cut the per-batch python and kernel-launch
+# overhead that dominates the sweep. Convex-hull methods (credal_ensembling, credal_bnn) are the
+# exception: their maxent element comes from an LBFGS whose line search is shared across the
+# batch, so their numbers do move with this. Lower it if a cell does not fit in memory.
+eval_batch_size: 2048
+
+amp: true
+device: null
+
+wandb:
+  enabled: true
+  entity: "risk-averse"
+  project: "paper"

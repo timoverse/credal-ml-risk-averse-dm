@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+  - method: ???
+  - recipe: ???
+
+seed: 1
+
+amp: true
+device: null
+
+wandb:
+  enabled: true
+  entity: "risk-averse"
+  project: "paper"

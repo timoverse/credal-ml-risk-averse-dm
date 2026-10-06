@@ -1,0 +1,102 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+
+# =========================
+# Claude
+# =========================
+.claude
+docs/
+scratch/
+
+# =========================
+# prek / pre-commit
+# =========================
+.prek_cache/
+
+# =========================
+# uv
+# =========================
+.python-version
+
+# =========================
+# PyCharm (JetBrains)
+# =========================
+.idea/
+*.iml
+
+# =========================
+# macOS
+# =========================
+.DS_Store
+
+# =========================
+# Testing / coverage
+# =========================
+.coverage
+htmlcov/
+.pytest_cache/
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Hydra
+# =========================
+outputs/
+multirun/
+
+# =========================
+# wandb
+# =========================
+wandb/
+
+# =========================
+# Plotting cache (W&B-fetched run snapshots)
+# =========================
+cache/
+
+# =========================
+# Runners
+# =========================
+*.sh
+
+# =========================
+# Local artifacts
+# =========================
+artifacts/
+
+# =========================
+# Local checkpoints
+# =========================
+# What train.py writes with save_to_disk=true when CHECKPOINTS_PATH resolves to the project tree
+# (i.e. off the cluster -- see src/paths.py). The offline cost-sensitive sweep alone drops ~21 of
+# these at ~45 MB each.
+/checkpoints/*.pt
+
+# Visual brainstorming companion
+.superpowers/
+
+# =========================
+# Overleaf paper (separate git repo)
+# =========================
+paper/
+out/

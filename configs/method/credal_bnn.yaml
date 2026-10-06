@@ -1,0 +1,27 @@
+# @package method
+# Settings ported from probly_benchmark (rebuttal branch): the base method config composed with
+# its override/credal_bnn_resnet18_cifar10.yaml. Every recipe in this repo trains from scratch,
+# so the from-scratch override values are the defaults here.
+name: "credal_bnn"
+params:
+  num_members: 10
+  # Initial posterior standard deviation of every Bayesian layer (the cifar10 override value;
+  # the benchmark's pretrained settings use 0.05).
+  posterior_std: 0.01
+  # One prior mean and prior standard deviation per ensemble member. Members share the zero
+  # prior mean but disagree on the prior scale, giving the credal-set vertices a meaningful
+  # spread per Caprio et al.'s credal Bayesian deep learning.
+  prior_mean: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  prior_std: [0.1, 0.15, 0.2, 0.3, 0.45, 0.7, 1.0, 1.5, 2.0, 3.0]
+  # From-scratch training: a fresh Kaiming init is not a meaningful posterior-mean seed, so the
+  # default Bayesian init is used (the benchmark sets true only for pretrained bases).
+  use_base_weights: false
+train:
+  # The per-batch KL penalty is kl_scale / N with N the training-set size. kl_scale = 1 is the
+  # exact ELBO of Blundell et al. (ICML 2015); kl_scale < 1 tempers the posterior (Wenzel et
+  # al., ICML 2020) and compensates for the larger effective dataset size under augmentation
+  # (Osawa et al., NeurIPS 2019). One weight sample per training step (the benchmark's
+  # samples = 1 setting). The trainer also zeroes the optimizer's weight_decay for this method
+  # (the benchmark's cifar10 override): the KL term already regularizes toward the prior, so
+  # weight decay would double-count.
+  kl_scale: 0.01

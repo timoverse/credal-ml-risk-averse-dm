@@ -1,0 +1,31 @@
+defaults:
+  - _self_
+  - method: ???
+  - recipe: ???
+
+seed: 1
+
+# Distribution shift sweep over the dataset's corruption benchmark (CIFAR-10-C or MedMNIST-C, see
+# src/data.py:SHIFT_CORRUPTIONS). corruptions: "all" (or null) sweeps the benchmark set; a
+# list of names (e.g. [gaussian_noise,fog,contrast]) runs that subset. include_clean adds a
+# severity-0 clean baseline via the ordinary clean test set.
+# No decision rule, loss, or aggregations: the set size is independent of all of them.
+corruptions: "all"
+severities: [1, 2, 3, 4, 5]
+include_clean: true
+
+# Batch size for the evaluation passes, independent of the recipe's training batch_size. Every
+# per-batch stage of this sweep acts per instance (the representer bounds, probly's efficiency,
+# the point prediction), so this is a throughput knob only and leaves results unchanged; large
+# batches cut the per-batch python and kernel-launch overhead. Unlike the risk sweep there is no
+# maxent or solver stage, so convex-hull methods are unaffected too. Lower it if a cell does not
+# fit in memory (credal_bnn is the heavy one: 10 members x 20 MC samples held per batch).
+eval_batch_size: 2048
+
+amp: true
+device: null
+
+wandb:
+  enabled: true
+  entity: "risk-averse"
+  project: "paper"
