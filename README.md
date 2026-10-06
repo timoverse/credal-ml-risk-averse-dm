@@ -4,7 +4,6 @@
 
 ```bash
 uv sync
-uv run pre-commit install   # only needed to commit: installs the lint and type-check hooks
 ```
 
 Python 3.13. All commands below run from the repository root. Datasets download on first use
