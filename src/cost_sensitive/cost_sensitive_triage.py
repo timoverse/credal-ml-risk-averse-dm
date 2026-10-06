@@ -1316,7 +1316,6 @@ def fig_line_curves(records: list[dict[str, Any]], cfg: SimpleNamespace, tau: fl
     _save_for_print(build, "cost_sensitive_triage_line_curves", LINE_PRINT_WIDTH)
 
 
-
 FLU_MISTREATED_COLOR = "#d3c4ac"
 MISTAKE_CELLS: tuple[tuple[str, int, tuple[int, ...], str, str], ...] = (
     ("sepsis $\\rightarrow$ sent home (20)", 2, (0,), "#67000d", "sepsis sent home"),
