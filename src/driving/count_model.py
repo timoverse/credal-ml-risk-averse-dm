@@ -70,11 +70,11 @@ class CountModel:
             self.n_safe[cell] += 1
 
     def predict_cell_grid(self, road: RoadMap) -> dict[str, np.ndarray]:
-        """Return the p_mle and p_high grids (H, W); 0 on wall cells (never entered).
+        """Return the p_mle, p_low and p_high grids (H, W); 0 on wall cells (never entered).
 
         p_mle for an unvisited cell is 0 (an optimistic 'safe until seen otherwise' assumption, not a
-        true MLE); p_high is the upper edge of the relative-likelihood credal interval ([0, 1] when
-        unvisited). These are the two beliefs the agents plan with (point estimate vs. credal bound).
+        true MLE); [p_low, p_high] is the relative-likelihood credal interval ([0, 1] when unvisited).
+        These are the beliefs the agents plan with (point estimate vs. credal interval).
 
         The interval solve runs once per UNIQUE (n_safe, n_crash) pair, not per cell: all well-cased
         safe cells share one pair and the few hazard cells realize a handful more.
@@ -83,9 +83,10 @@ class CountModel:
         n = self.n_safe + self.n_crash
         p_mle = np.zeros(road.grid.shape, dtype=np.float64)
         np.divide(self.n_crash, n, out=p_mle, where=(n > 0) & free)
+        p_low = np.zeros(road.grid.shape, dtype=np.float64)
         p_high = np.zeros(road.grid.shape, dtype=np.float64)
         pairs = np.unique(np.stack([self.n_safe[free], self.n_crash[free]], axis=1), axis=0)
         for ns, nc in pairs:
-            _, hi = credal_interval(int(ns), int(nc), self.alpha)
-            p_high[free & (self.n_safe == ns) & (self.n_crash == nc)] = hi
-        return {"p_mle": p_mle, "p_high": p_high}
+            cells = free & (self.n_safe == ns) & (self.n_crash == nc)
+            p_low[cells], p_high[cells] = credal_interval(int(ns), int(nc), self.alpha)
+        return {"p_mle": p_mle, "p_low": p_low, "p_high": p_high}

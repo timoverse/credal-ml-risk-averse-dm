@@ -1,4 +1,4 @@
-"""Self-driving car on a mountain road: how five agents route past an under-observed hazard.
+"""Self-driving car on a mountain road: how the agents route past an under-observed hazard.
 
 A car must reach its destination; the short route crosses a hazardous stretch (rockfall / flooding)
 with an unknown crash probability, the long detour goes safely around the mountain. Each agent plans
@@ -12,15 +12,16 @@ snapshots of the routes taken beside them:
 
 - `mle` (risk-neutral, value iteration on p_mle): always takes the shortcut -- best mean reward,
   worst tail.
-- `aleatoric_cvar` / CeSoR baseline (min(1, p_mle/beta) in value iteration): a per-cell CVaR
-  surrogate on the point estimate; reacts once it has observed crashes, then avoids.
+- `aleatoric_cvar` (min(1, p_mle/beta) in value iteration): a per-cell CVaR surrogate on the point
+  estimate; reacts once it has observed crashes, then avoids. Computed, not drawn.
 - `credal_minimax` (value iteration on the upper credal bound p_high): epistemic robustness -- avoids
   while the hazard is under-observed, then aligns with the MLE once p_high shrinks below threshold.
+  Computed, not drawn.
 - `cvar_minimax` / `cvar_mle` (cvar_agent.py): the cost-sensitive CVaR-minimax rule, planned per cell
-  by budget-augmented value iteration -- it minimises the CVaR of the *return* under the worst-case
-  credal probability (p_high) or the single MLE distribution (p_mle), with the VaR threshold v
-  calibrated on a hold-out. The credal one is the robust risk-averse agent (always detours); the MLE
-  one walks into the under-observed hazard.
+  by budget-augmented value iteration -- it minimises the CVaR of the *return* under the worst case
+  of the per-cell credal intervals [p_low, p_high] or under the single MLE distribution (p_mle),
+  jointly with the VaR threshold v. The credal one is the robust risk-averse agent (always detours);
+  the MLE one walks into the under-observed hazard.
 
 Run:            uv run python src/experiments/credal_driving_curve.py --setting {default|twin_peaks}
 Re-plot only:   uv run python src/experiments/credal_driving_curve.py --setting <name> --plot-only
@@ -38,11 +39,13 @@ from __future__ import annotations
 import argparse
 import logging
 import pickle
+import re
 import sys
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import matplotlib.path as mpath
 import matplotlib.patheffects as pe
@@ -51,7 +54,6 @@ import matplotlib.transforms as mtransforms
 import numpy as np
 from matplotlib.colors import to_rgb, to_rgba
 from matplotlib.gridspec import GridSpec
-from matplotlib.legend_handler import HandlerTuple
 from matplotlib.mathtext import MathTextParser
 from matplotlib.offsetbox import DrawingArea
 from matplotlib.patches import Circle, FancyBboxPatch, PathPatch
@@ -63,7 +65,7 @@ from scipy import ndimage
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # put src/ on the path
 
 from driving.agents import AGENTS, crash_belief  # noqa: E402
-from driving.cvar_agent import calibrate_v, cvar_route  # noqa: E402
+from driving.cvar_agent import cvar_route  # noqa: E402
 from driving.evaluate import cvar_of_returns, evaluate_route  # noqa: E402
 from driving.gridworld import HAZARD, WALL, build_road  # noqa: E402
 from driving.offline import collect_observations  # noqa: E402
@@ -96,30 +98,23 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from matplotlib.figure import Figure
-    from matplotlib.legend import Legend
     from matplotlib.text import Text
 
 logger = logging.getLogger(__name__)
 
 # the analytical agents (AGENTS) plus two reward-CVaR-minimax agents (budget-augmented value
-# iteration, hold-out-calibrated v): cvar_minimax over the credal set (p_high) and cvar_mle over the
-# single-distribution MLE (p_mle).
+# iteration, v optimised with the policy): cvar_minimax over the credal intervals and cvar_mle over
+# the single-distribution MLE (p_mle).
 ORDER = (*AGENTS, "cvar_minimax", "cvar_mle")
-# each reward-CVaR agent's belief grid key the augmented value iteration plans against
-_CVAR_PROB_KEY = {"cvar_minimax": "p_high", "cvar_mle": "p_mle"}
-# agents drawn in the figure: credal_minimax (EV-robust baseline) is still computed but omitted here.
-PLOT_AGENTS = tuple(r for r in ORDER if r != "credal_minimax")
+# each reward-CVaR agent's (lower, upper) belief grid keys the augmented value iteration plans against
+_CVAR_INTERVAL = {"cvar_minimax": ("p_low", "p_high"), "cvar_mle": ("p_mle", "p_mle")}
 
 # Each drawn agent's method in paper_style.METHODS, which fixes its color, marker and line style in
-# every figure of the paper: the MLE's dark gray, CeSoR in the baselines' blue, ours in red, and the
-# MLE ablation of our rule in a lighter gray, dashed and with its own marker.
-_METHOD = {"mle": "base", "aleatoric_cvar": "cesor", "cvar_mle": "base+rule", "cvar_minimax": OURS}
+# every figure of the paper: the MLE's dark gray, ours in red, and the MLE ablation of our rule in a
+# lighter gray, dashed and with its own marker. credal_minimax (EV-robust) and aleatoric_cvar (the
+# per-cell CVaR surrogate) are still computed but not drawn.
+_METHOD = {"mle": "base", "cvar_mle": "base+rule", "cvar_minimax": OURS}
 _COLORS = {agent: METHODS[key].color for agent, key in _METHOD.items()}
-# CeSoR and cvar_mle coincide for the whole sweep, so they are drawn as ONE explicit two-coloured
-# line (CeSoR's color as the base, the ablation's gray dashes over it, their two markers taking
-# turns along it) and simply listed twice in the legend, each entry with its own marker. The dashes
-# are as long as the gaps, so the line shows as much of one color as of the other.
-_CURVE_DASH = (0, (2.8, 2.8))
 # dash and gap, in points at scale 1, of the vertical guides that tie the snapshots to their
 # observation count. In points rather than in line widths, matplotlib's unit: the guides are as
 # thin as the panel box, and their dashes must not shrink with that hairline.
@@ -127,15 +122,14 @@ _GUIDE_DASH_PT = (2.1, 1.4)
 _ARROW_GAP = 1.2  # gap between a y label and its tick labels, in label sizes; holds the direction arrow
 _LABELS = {
     "mle": METHODS["base"].label,
-    "aleatoric_cvar": METHODS["cesor"].label,
     # the rule is ours, the MLE under it is not: only the rule part is semibold (paper_style.OUR_RULE)
     "cvar_mle": f"{METHODS['base'].label} {OUR_RULE}",
     "cvar_minimax": ours_label("Credal + rule"),
 }
 _NEON_ORANGE = "#ff6d00"
 _XTICKS = (1, 2, 4, 8, 20, 50)
-# legend reads baselines -> ablation -> ours; drawing order (PLOT_AGENTS) is independent of this
-_LEGEND_ORDER = ("mle", "aleatoric_cvar", "cvar_mle", "cvar_minimax")
+# the drawn agents, in the legend's order: baseline -> ablation -> ours
+_LEGEND_ORDER = ("mle", "cvar_mle", "cvar_minimax")
 
 
 def _crosses_hazard(route: list, road) -> bool:  # noqa: ANN001
@@ -167,7 +161,7 @@ def _route_classes(routes: list, road) -> list[tuple[float, bool, list]]:  # noq
 # metric key in evaluate_route -> (results key, axis label) for the three swept curves.
 # crash_rate and mean_return are means of per-seed values (identical to pooled means, equal episode
 # counts). cvar_return is the POPULATION CVaR: returns pooled over all seeds x episodes, one shared
-# VaR threshold across seeds -- the paper's marginal CVaR and what calibrate_v optimises. A mean of
+# VaR threshold across seeds -- the paper's marginal CVaR. A mean of
 # per-seed CVaRs would let lucky seeds offset unlucky seeds' tails (the instance-wise aggregation
 # the paper argues against) and is always at least as favourable as the population CVaR.
 _METRICS = {
@@ -183,61 +177,64 @@ def run(cfg, setting: str) -> dict:  # noqa: ANN001
     road = build_road(c.world, p_hazard=c.p_hazard)
     rewards = {"step_cost": c.step_cost, "goal_reward": c.goal_reward, "crash_penalty": c.crash_penalty}
     s_max = None if c.s_max is None else int(c.s_max)
+    plan = partial(_cvar_routes, road, beta=c.beta, s_max=s_max, v_step=float(c.cvar_v_step), rewards=rewards)
     snapshot_k = {int(k) for k in c.snapshot_k}
     swept = {res_key: {r: [] for r in ORDER} for res_key, _ in _METRICS.values()}
     swept_std = {res_key: {r: [] for r in ORDER} for res_key, _ in _METRICS.values()}
     snapshots: dict[int, dict[str, list]] = {}
 
-    for k_hazard in c.k_hazard_values:
-        # hold-out-calibrated VaR threshold per reward-CVaR agent (credal p_high vs MLE p_mle)
-        v_cvar = {
-            r: _calibrate_cvar_v(cfg, c, road, rewards, int(k_hazard), pk, s_max) for r, pk in _CVAR_PROB_KEY.items()
-        }
-        acc = {m: {r: [] for r in ORDER} for m in _METRICS if m != "cvar_return"}
-        seed_returns: dict[str, list] = {r: [] for r in ORDER}  # raw rollout returns, pooled below
-        routes_seen = {r: [] for r in ORDER}
-        for s in range(c.n_seeds):
-            model = collect_observations(
-                road,
-                n_case=c.n_case,
-                k_hazard=int(k_hazard),
-                alpha=c.alpha,
-                rng=np.random.default_rng(cfg.seed + s),
-            )
-            grids = model.predict_cell_grid(road)
-            for rule in ORDER:
-                if rule in _CVAR_PROB_KEY:
-                    route = cvar_route(road, grids[_CVAR_PROB_KEY[rule]], v_cvar[rule], s_max=s_max, **rewards)
-                else:
-                    belief = crash_belief(rule, grids, beta=c.beta)
-                    policy, _ = value_iteration(road, belief, gamma=c.gamma, **rewards)
-                    route = intended_route(road, policy)
-                metrics = evaluate_route(
+    with ProcessPoolExecutor() as executor:
+        for k_hazard in c.k_hazard_values:
+            seed_grids = [
+                collect_observations(
                     road,
-                    route,
-                    n_episodes=cfg.eval.n_episodes,
-                    cvar_beta=c.beta,
-                    rng=np.random.default_rng(7000 + s),
-                    **rewards,
-                )
-                for m in acc:
-                    acc[m][rule].append(metrics[m])
-                seed_returns[rule].append(metrics["returns"])
-                routes_seen[rule].append(route)
-        for m, (res_key, _) in _METRICS.items():
-            for rule in ORDER:
-                if m == "cvar_return":
-                    # population CVaR: one tail over all seeds x episodes -- a single pooled
-                    # statistic per (agent, k), so it is drawn without a band (std stays 0)
-                    swept[res_key][rule].append(cvar_of_returns(np.concatenate(seed_returns[rule]), c.beta))
-                    swept_std[res_key][rule].append(0.0)
-                else:
-                    swept[res_key][rule].append(float(np.mean(acc[m][rule])))
-                    swept_std[res_key][rule].append(float(np.std(acc[m][rule])))
-        if int(k_hazard) in snapshot_k:
-            # store the RAW per-seed routes; the behaviour classes and the representative route
-            # drawn per class are a pure plotting decision (_route_classes, applied in _build)
-            snapshots[int(k_hazard)] = {r: [list(map(tuple, rt)) for rt in routes_seen[r]] for r in ORDER}
+                    n_case=c.n_case,
+                    k_hazard=int(k_hazard),
+                    alpha=c.alpha,
+                    rng=np.random.default_rng(cfg.seed + s),
+                ).predict_cell_grid(road)
+                for s in range(c.n_seeds)
+            ]
+            # the reward-CVaR plans are the sweep's hot loop and independent across seeds
+            cvar_routes = list(executor.map(plan, seed_grids))
+            acc = {m: {r: [] for r in ORDER} for m in _METRICS if m != "cvar_return"}
+            seed_returns: dict[str, list] = {r: [] for r in ORDER}  # raw rollout returns, pooled below
+            routes_seen = {r: [] for r in ORDER}
+            for s, grids in enumerate(seed_grids):
+                for rule in ORDER:
+                    if rule in _CVAR_INTERVAL:
+                        route = cvar_routes[s][rule]
+                    else:
+                        belief = crash_belief(rule, grids, beta=c.beta)
+                        policy, _ = value_iteration(road, belief, gamma=c.gamma, **rewards)
+                        route = intended_route(road, policy)
+                    metrics = evaluate_route(
+                        road,
+                        route,
+                        n_episodes=cfg.eval.n_episodes,
+                        cvar_beta=c.beta,
+                        rng=np.random.default_rng(7000 + s),
+                        **rewards,
+                    )
+                    for m in acc:
+                        acc[m][rule].append(metrics[m])
+                    seed_returns[rule].append(metrics["returns"])
+                    routes_seen[rule].append(route)
+            for m, (res_key, _) in _METRICS.items():
+                for rule in ORDER:
+                    if m == "cvar_return":
+                        # population CVaR: one tail over all seeds x episodes -- a single pooled
+                        # statistic per (agent, k), so it is drawn without a band (std stays 0)
+                        swept[res_key][rule].append(cvar_of_returns(np.concatenate(seed_returns[rule]), c.beta))
+                        swept_std[res_key][rule].append(0.0)
+                    else:
+                        swept[res_key][rule].append(float(np.mean(acc[m][rule])))
+                        swept_std[res_key][rule].append(float(np.std(acc[m][rule])))
+            if int(k_hazard) in snapshot_k:
+                # store the RAW per-seed routes; the behaviour classes and the representative route
+                # drawn per class are a pure plotting decision (_route_classes, applied in _build)
+                snapshots[int(k_hazard)] = {r: [list(map(tuple, rt)) for rt in routes_seen[r]] for r in ORDER}
+            logger.info("k=%d: crash rate %s", k_hazard, {r: round(swept["crash_rate"][r][-1], 3) for r in ORDER})
 
     results = {
         "setting": setting,
@@ -267,21 +264,12 @@ def _save_results(results: dict, plot_path: str) -> None:
         pickle.dump(results, f)
 
 
-def _calibrate_cvar_v(cfg, c, road, rewards, k_hazard, prob_key, s_max) -> float:  # noqa: ANN001, PLR0913
-    """Calibrate a reward-CVaR VaR threshold v on hold-out seeds (disjoint from the test seeds)."""
-    holdout_grids = []
-    for hs in range(c.cvar_holdout_seeds):
-        hmodel = collect_observations(
-            road,
-            n_case=c.n_case,
-            k_hazard=k_hazard,
-            alpha=c.alpha,
-            rng=np.random.default_rng(cfg.seed + 100_000 + hs),
-        )
-        holdout_grids.append(hmodel.predict_cell_grid(road))
-    return calibrate_v(
-        holdout_grids, road, beta=c.beta, rewards=rewards, num_grid=c.cvar_num_grid, prob_key=prob_key, s_max=s_max
-    )
+def _cvar_routes(road, grids: dict, *, beta: float, s_max: int | None, v_step: float, rewards: dict) -> dict:  # noqa: ANN001
+    """One seed's route per reward-CVaR agent, planned from its own belief grids (a pool task)."""
+    return {
+        rule: cvar_route(road, grids[lo], grids[hi], beta=beta, s_max=s_max, v_step=v_step, **rewards)
+        for rule, (lo, hi) in _CVAR_INTERVAL.items()
+    }
 
 
 def _lane_offset(xs: np.ndarray, ys: np.ndarray, d: float) -> tuple[np.ndarray, np.ndarray]:
@@ -380,21 +368,6 @@ def _draw_car(ax, cell, sc=1.0, color="#1f3b73", lw=1.0) -> None:  # noqa: ANN00
         ax.add_patch(Circle((wx, cy + 0.20 * sc), 0.052 * sc, facecolor="#d9d9d9", edgecolor="none", zorder=8.3))
 
 
-def _combo_styles(sizes: Sizes) -> tuple[dict, dict, dict, dict]:
-    """How the combined CeSoR / MLE + rule line is drawn, in the panels and in the legend.
-
-    Four sets of Line2D keywords, to be drawn in this order: CeSoR's solid line with the white halo,
-    the ablation's gray dashes over it, then CeSoR's and the ablation's own marker on a line of no
-    width. The dashes carry no halo, which would wipe out the base color between them; the markers
-    keep theirs, so they stay clear of the two-colored line they sit on.
-    """
-    cesor, rule = line_style(_METHOD["aleatoric_cvar"], sizes), line_style(_METHOD["cvar_mle"], sizes)
-    base = cesor | {"marker": "none"}
-    dashes = rule | {"marker": "none", "linestyle": _CURVE_DASH, "path_effects": [], "zorder": 3.1}
-    marker_cesor, marker_rule = (style | {"linestyle": "none", "zorder": 3.2} for style in (cesor, rule))
-    return base, dashes, marker_cesor, marker_rule
-
-
 def _plot_metric(  # noqa: PLR0913
     ax,  # noqa: ANN001
     k_values: list,
@@ -415,30 +388,19 @@ def _plot_metric(  # noqa: PLR0913
     Central line per agent, with a +-1 std shaded band across seeds where the metric is a per-seed
     mean (mean reward, crash rate); the population CVaR is one pooled statistic per (agent, k), so
     its panel is drawn without a band (`band=False`). A white halo keeps the lines readable.
-    CeSoR and cvar_mle coincide, so ONE two-coloured line (drawn from the cvar_mle sweep)
-    represents both: CeSoR's color as the base, the ablation's gray dashes on top, and their two
-    markers taking turns from one observation count to the next (see `_combo_styles`). Its band
-    takes the base color; the ablation's gray would read as a second MLE band.
     `show_x=False` hides the x tick labels for the upper panels of a shared-x stack.
     """
     k = np.asarray(k_values, dtype=float)
-    if band:
-        # bands first; one band for the combined pair
-        for rule, color in (("mle", "mle"), ("cvar_mle", "aleatoric_cvar"), ("cvar_minimax", "cvar_minimax")):
+    if band:  # bands first, under every line
+        for rule in _LEGEND_ORDER:
             mean = np.asarray(data[rule])
             std = np.asarray(data_std[rule])
             lo, hi = mean - std, mean + std
             if clip is not None:
                 lo, hi = np.clip(lo, *clip), np.clip(hi, *clip)
-            ax.fill_between(k, lo, hi, **band_style(_COLORS[color]))
-    ax.plot(k, data["mle"], **line_style(_METHOD["mle"], sizes))
-    combo = np.asarray(data["cvar_mle"], dtype=float)
-    base, dashes, marker_cesor, marker_rule = _combo_styles(sizes)
-    ax.plot(k, combo, **base)
-    ax.plot(k, combo, **dashes)
-    ax.plot(k[0::2], combo[0::2], **marker_cesor)
-    ax.plot(k[1::2], combo[1::2], **marker_rule)
-    ax.plot(k, data["cvar_minimax"], **line_style(_METHOD["cvar_minimax"], sizes))
+            ax.fill_between(k, lo, hi, **band_style(_COLORS[rule]))
+    for rule in _LEGEND_ORDER:
+        ax.plot(k, data[rule], **line_style(_METHOD[rule], sizes))
     ax.margins(y=0.14)  # keep the markers clear of the top/bottom borders
     if ycenter is not None:  # symmetric y-range around a reference value
         y0, y1 = ax.get_ylim()
@@ -670,8 +632,8 @@ def _plot_snapshot(ax, road, classes, k_label, sizes: Sizes) -> None:  # noqa: A
 
     `classes[rule]` is a list of (fraction, crosses_hazard, route) from `_route_classes`, so an agent
     that is split across seeds (e.g. the MLE mid-transition) draws BOTH its routes, the faint one
-    being the minority behaviour. Three lanes: MLE, the combined CeSoR / MLE + rule line
-    (two-coloured as in the metric panels, drawn from the cvar_mle routes), and ours.
+    being the minority behaviour. Three lanes: MLE, MLE + rule (dashed as in the metric panels),
+    and ours.
     """
     sc = _scale(road)
     gs = _glyph_scale(ax, road, sc)  # keeps the point-sized glyphs proportional to the drawn map
@@ -679,11 +641,10 @@ def _plot_snapshot(ax, road, classes, k_label, sizes: Sizes) -> None:  # noqa: A
     _draw_road(ax, road, gs, sizes.scale)
     # lane separation: the published small map keeps its diagonal shifts; big maps use true
     # perpendicular lanes (ours on the side pointing AWAY from the mountain a detour hugs)
-    legacy = {"mle": -0.2, "combo": 0.0, "cvar_minimax": 0.2}
-    lanes = {"mle": 0.13 * sc, "combo": 0.0, "cvar_minimax": -0.13 * sc}
-    for rule in ("mle", "combo", "cvar_minimax"):
-        cls = classes["cvar_mle" if rule == "combo" else rule]
-        for frac, _is_cross, route in cls:
+    legacy = {"mle": -0.2, "cvar_mle": 0.0, "cvar_minimax": 0.2}
+    lanes = {"mle": 0.13 * sc, "cvar_mle": 0.0, "cvar_minimax": -0.13 * sc}
+    for rule in _LEGEND_ORDER:
+        for frac, _is_cross, route in classes[rule]:
             xs = np.array([cell[1] for cell in route], dtype=float)
             ys = np.array([cell[0] for cell in route], dtype=float)
             if sc == 1.0:
@@ -692,31 +653,17 @@ def _plot_snapshot(ax, road, classes, k_label, sizes: Sizes) -> None:  # noqa: A
                 xs, ys = _lane_offset(xs, ys, lanes[rule])
             sx, sy = _chaikin(xs, ys)
             # opacity is simply the fraction of seeds taking this route
-            if rule == "combo":
-                ax.plot(
-                    sx, sy, color=_COLORS["aleatoric_cvar"], lw=lane_lw, alpha=frac, solid_capstyle="round", zorder=4
-                )
-                ax.plot(
-                    sx,
-                    sy,
-                    color=_COLORS["cvar_mle"],
-                    lw=lane_lw,
-                    linestyle=_CURVE_DASH,
-                    alpha=frac,
-                    dash_capstyle="butt",
-                    zorder=4.1,
-                )
-            else:
-                is_ours = rule == "cvar_minimax"
-                ax.plot(
-                    sx,
-                    sy,
-                    color=_COLORS[rule],
-                    lw=lane_lw,
-                    alpha=frac,
-                    solid_capstyle="round",
-                    zorder=6 if is_ours else 3.5,
-                )
+            ax.plot(
+                sx,
+                sy,
+                color=_COLORS[rule],
+                lw=lane_lw,
+                linestyle=METHODS[_METHOD[rule]].linestyle,
+                alpha=frac,
+                solid_capstyle="round",
+                dash_capstyle="butt",
+                zorder={"mle": 3.5, "cvar_mle": 4, "cvar_minimax": 6}[rule],
+            )
     _draw_goal(ax, road.goal, sc, gs, sizes.scale)
     _draw_car(ax, road.start, sc, lw=sizes.scale)
     # the tag sits in the lower-right corner of the map. Big maps pull it in from the corner, clear
@@ -865,7 +812,7 @@ _OURS_BANNER = r"$\mathbf{ours}$ takes the safe route at every EU level"
 # figure geometry per layout, hand-tuned in inches. "wide" is the two-column figure* (the appendix's
 # twin-peaks figure; the small map shares it). "onecol" packs the content into ONE column: curve
 # panels ~0.3x as wide, the map column trimmed to the maps, notes about half as wide (see
-# `_NOTE_BODY_ONECOL`), and the legend as a 2x2 block beside the x-label.
+# `_NOTE_BODY_ONECOL`), and the legend's row set tighter to fit beside the x-label.
 # The type is NOT part of the geometry: `print_width` is the width the paper includes the layout
 # at, and `_plot` sizes all type and strokes so that they print there like the reference figure's
 # (paper_style.Sizes). A panel that the type no longer fits is a geometry problem to solve here.
@@ -885,7 +832,7 @@ _LAYOUTS: dict[str, dict] = {
         "right": {"width_ratios": [0.67, 1.089], "hspace": 0.028, "wspace": 0.04, "bottom": 0.070, "top": 0.966},
         "note": {},  # `_draw_note` defaults
         "note_bodies": None,  # the two-line notes stored with the snapshot rows
-        "legend_rows": 1,  # one row sharing the x-label's line
+        "legend": {},  # the row's default spacing (see `legend` in `_build`)
         "titles": (
             "A) Evaluation across hazard-observation levels",
             "B) Illustration and interpretation at three EU levels",
@@ -924,7 +871,15 @@ _LAYOUTS: dict[str, dict] = {
         # which balances the space above the heading against the space under the body
         "note": {"h": 0.71, "rounding": 0.13, "title_y": 0.31, "body_y": -0.167},
         "note_bodies": _NOTE_BODY_ONECOL,
-        "legend_rows": 2,  # 2x2 beside the x-label
+        # the row has only the room right of the x-label, so it is set tighter than in wide and
+        # without the legend's own padding: it ends flush with the note boxes
+        "legend": {
+            "columnspacing": 1.0,
+            "handlelength": 1.5,
+            "handletextpad": 0.5,
+            "borderpad": 0.0,
+            "borderaxespad": 0.0,
+        },
         "titles": None,
         "ours_banner": _OURS_BANNER,
         "pad_inches": 0.015,  # the default 0.1in per side would cost 5% of a column's width
@@ -1022,14 +977,16 @@ def _draw_ours_banner(ax, text: str, sizes: Sizes) -> None:  # noqa: ANN001
             clip_on=False,
         )
     )
-    # Centred by its ink, not by its line box: va="center" centres ascent plus descent, which sets a
-    # line with a single descender visibly high in so slim a box. The band from the baseline to the
-    # ascenders is what the eye centres, so the baseline goes half an ascender under the middle.
-    ascender = TextPath((0, 0), "l", size=sizes.tick, prop=FP_REGULAR).get_extents().height
+    # Centred by its INK, from the top of the ascenders to the foot of the descender, so the gap to
+    # the box is the same above and below. va="center" centres the line box instead, whose descent
+    # is deeper than this line's one "y" (text 0.45pt high); centring only the ascender-to-baseline
+    # band ignores that "y" (0.55pt low). Here the two agree with the x-height band on the middle.
+    plain = re.sub(r"\$\\mathbf\{(.*?)\}\$", r"\1", text)
+    ink = TextPath((0, 0), plain, size=sizes.tick, prop=FP_REGULAR).get_extents()
     cell_pt = ax.get_position().height * ax.figure.get_figheight() * 72
     label = ax.text(
         0.5,
-        0.5 - ascender / 2 / cell_pt,
+        0.5 - (ink.y0 + ink.y1) / 2 / cell_pt,
         text,
         transform=ax.transAxes,
         va="baseline",
@@ -1093,7 +1050,7 @@ def _plot_metric_summary(ax, results: dict, res_key: str, sizes: Sizes, bar_frac
             clip_on=False,
         )
     for i, (rule, v) in enumerate(zip(rules, vals, strict=True)):
-        y = 0.68 - i * 0.18  # four lanes, clear of the header above and the bottom border below
+        y = 0.635 - i * 0.225  # three lanes, clear of the header above and the bottom border below
         wv = v / span * bar_frac
         is_best = v == best
         if abs(wv) > 0.012:  # a zero bar (our crash rate) is just its label
@@ -1123,26 +1080,8 @@ def _plot_metric_summary(ax, results: dict, res_key: str, sizes: Sizes, bar_frac
 
 
 def _legend_handles(sizes: Sizes) -> list:
-    """One legend handle per agent in `_LEGEND_ORDER`: the lines as the panels draw them.
-
-    CeSoR and the MLE ablation both show the two-coloured line they share, each with its own marker
-    on it. The dash phase puts a gap at the middle of a handle, under the marker, so a full gray
-    dash sits on either side of it and the handle ends in the base color like a plain line's.
-    """
-    base, dashes, marker_cesor, marker_rule = _combo_styles(sizes)
-    # in the dashes' own unit, the line width: the handle is _HANDLE_LENGTH legend-font sizes long
-    on, off = _CURVE_DASH[1]
-    length = _HANDLE_LENGTH * sizes.legend / sizes.line
-    centred = dashes | {"linestyle": ((on + off / 2 - length / 2) % (on + off), (on, off))}
-
-    def line(style: dict) -> plt.Line2D:
-        return plt.Line2D([0], [0], **style)
-
-    combo = {
-        "aleatoric_cvar": (line(base), line(centred), line(marker_cesor)),
-        "cvar_mle": (line(base), line(centred), line(marker_rule)),
-    }
-    return [combo[rule] if rule in combo else line(line_style(_METHOD[rule], sizes)) for rule in _LEGEND_ORDER]
+    """One legend handle per agent in `_LEGEND_ORDER`: the lines as the panels draw them."""
+    return [plt.Line2D([0], [0], **line_style(_METHOD[rule], sizes)) for rule in _LEGEND_ORDER]
 
 
 _HANDLE_LENGTH = 1.8  # legend handle length, in legend-font sizes
@@ -1260,58 +1199,23 @@ def _build(results: dict, layout: str, sizes: Sizes) -> Figure:  # noqa: PLR0915
     xlabel_mid -= 0.115 * sizes.label / 72 / fig.get_figheight()
     note_right = max(a.get_position().x1 for a in note_axes)
 
-    def legend(**kw: Any) -> Legend:  # noqa: ANN401
-        leg = fig.legend(
-            handles,  # the tuples among them are drawn by HandlerTuple, one artist over the other
-            labels,
-            frameon=False,
-            prop=font(FP_REGULAR, sizes.legend),
-            columnspacing=1.4,
-            handlelength=_HANDLE_LENGTH,
-            handletextpad=0.6,
-            handleheight=1.2,
-            # pad=0: HandlerTuple otherwise insets the stacked sub-artists, so the combo handles'
-            # lines would end ~half a fontsize short of the plain handles' (entries look misaligned)
-            handler_map={tuple: HandlerTuple(ndivide=1, pad=0)},
-            **kw,
-        )
-        for text in leg.get_texts():
-            if text.get_text().endswith(OURS_TAG):  # ours is semibold as a whole
-                text.set_fontproperties(font(FP_SEMIBOLD, sizes.legend))
-        return leg
-
-    if lay["legend_rows"] == 2:
-        # 2x2, baselines in the left column and ours in the right (matplotlib fills column-major).
-        # Still no line of its own: the block is centred between the tick labels' line and the
-        # x-label's, and `labelspacing` makes its row pitch equal their distance, so the upper row
-        # sits on the former and the lower row on the latter. It is the key to both parts, so it is
-        # centred in the room between the x-label and the right edge, which puts it across the divider.
-        tick_bb = metric_axes[-1].get_xticklabels()[0].get_window_extent()
-        tick_mid = to_fig.transform((0, (tick_bb.y0 + tick_bb.y1) / 2))[1]
-        xlabel_right = to_fig.transform((xlabel_bb.x1, 0))[0]
-        block = {
-            "loc": "center",
-            "bbox_to_anchor": ((xlabel_right + note_right) / 2, (tick_mid + xlabel_mid) / 2),
-            "ncol": 2,
-            "borderpad": 0.0,
-            "borderaxespad": 0.0,
-        }
-        # the row pitch a labelspacing gives depends on the faces, so it is measured on a trial
-        # legend (between the left column's two baselines) and the spacing corrected by the miss
-        trial = 0.8
-        leg = legend(labelspacing=trial, **block)
-        fig.canvas.draw()
-        upper, lower = (t.get_window_extent().y0 for t in leg.get_texts()[:2])
-        pitch = (upper - lower) * 72 / fig.dpi
-        target = (tick_mid - xlabel_mid) * fig.get_figheight() * 72
-        leg.remove()
-        leg = legend(labelspacing=trial + (target - pitch) / sizes.legend, **block)
-    else:
-        leg = legend(loc="center right", bbox_to_anchor=(note_right, xlabel_mid), ncol=len(labels))
-    # A legend column stacks its entries by their own heights, and the mathtext label is deeper than
-    # the plain ones, which sets the entry under it lower than its neighbour in the other column.
-    # Put every entry back on the baseline of the first column's entry of its row. Entries come
-    # column-major; in the one-row legend each is its own column, already aligned.
+    legend_kw = {"columnspacing": 1.4, "handlelength": _HANDLE_LENGTH, "handletextpad": 0.6} | lay["legend"]
+    leg = fig.legend(
+        handles,
+        labels,
+        loc="center right",
+        bbox_to_anchor=(note_right, xlabel_mid),
+        ncol=len(labels),
+        frameon=False,
+        prop=font(FP_REGULAR, sizes.legend),
+        handleheight=1.2,
+        **legend_kw,
+    )
+    for text in leg.get_texts():
+        if text.get_text().endswith(OURS_TAG):  # ours is semibold as a whole
+            text.set_fontproperties(font(FP_SEMIBOLD, sizes.legend))
+    # Put every entry on the baseline of the first one (the mathtext label is deeper than the plain
+    # ones, and each entry is a column of its own).
     fig.canvas.draw()
     texts, handle_boxes = leg.get_texts(), leg.findobj(DrawingArea)
     baselines = [text.get_transform().transform(text.get_position())[1] for text in texts]
@@ -1319,7 +1223,7 @@ def _build(results: dict, layout: str, sizes: Sizes) -> Figure:  # noqa: PLR0915
     # baseline-aligns the handles a touch above that -- drop them onto the ink centre
     handle_drop = -0.06 * sizes.legend / 72
     for i, (text, box) in enumerate(zip(texts, handle_boxes, strict=True)):
-        lift = (baselines[i % lay["legend_rows"]] - baselines[i]) / fig.dpi
+        lift = (baselines[0] - baselines[i]) / fig.dpi
         text_shift = mtransforms.ScaledTranslation(0, lift - _mathtext_rise(text) / 72, fig.dpi_scale_trans)
         text.set_transform(text.get_transform() + text_shift)
         handle_shift = mtransforms.ScaledTranslation(0, lift + handle_drop, fig.dpi_scale_trans)

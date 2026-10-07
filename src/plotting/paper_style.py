@@ -25,13 +25,12 @@ alone.
 
 Blue is BASELINE_BLUE. It is the one color every baseline wears in the figures that contrast the
 baselines as a group with our method (the triage bars and line curves, the runtime bars, coverage
-against efficiency), and it is the own color of the two risk-averse baselines where each method
-has one: SQwash in the shift and triage figures, CeSoR in the driving figure. They never share a
-figure.
+against efficiency), and it is the own color of the risk-averse baseline SQwash in the shift and
+triage figures, where each method has one.
 
 The MLE under our rule is a lighter gray than the plain MLE, as well as dashed, so the two can be
 told apart in a bar. With it and the blue, the shift grid's six colors clear the same checks (CVD
-8.8, normal vision 16.4), and so do the driving figure's four.
+8.8, normal vision 16.4).
 """
 
 from __future__ import annotations
@@ -181,7 +180,7 @@ class Method:
 
 OURS = "credal_rl_multinomial"
 # Every baseline, in the figures that set the baselines as a group against ours; and the own color
-# of SQwash and of CeSoR.
+# of SQwash.
 BASELINE_BLUE = "#4286de"
 # Keyed by method.name of the W&B cache where one exists. "base+rule" is the MLE under our decision
 # rule: a lighter gray than the plain MLE's, dashed, with its own marker. Ours takes the circle; the
@@ -191,7 +190,6 @@ METHODS: dict[str, Method] = {
     "base+rule": Method("MLE + rule", "#999999", "v", (0, (3.0, 1.6))),
     "sqwash": Method("SQwash", BASELINE_BLUE, "s"),
     "adacvar": Method("AdaCVaR", "#eda100", "D"),
-    "cesor": Method("CeSoR", BASELINE_BLUE, "d"),
     "credal_ensembling": Method("CreEns", "#849098", "P"),
     "credal_bnn": Method("CreBNN", "#008300", "p"),
     "credal_wrapper": Method("CreWra", "#4a3aa7", "X"),

@@ -1,11 +1,12 @@
 # Credal hazardous road (offline RL): plan from a fixed under-sampled dataset with value iteration.
 # One sweep per setting: uv run python src/experiments/credal_driving_curve.py --setting <name>
 #
-# Headline curve per setting: crash rate / mean reward / CVaR reward vs hazard observations, 5 agents.
-# THREE value-iteration agents (per-cell crash belief): mle=p_mle; aleatoric_cvar/CeSoR=min(1,p_mle/beta);
+# Headline curve per setting: crash rate / mean reward / CVaR reward vs hazard observations, 5 agents
+# (the figure draws mle, cvar_mle and cvar_minimax).
+# THREE value-iteration agents (per-cell crash belief): mle=p_mle; aleatoric_cvar=min(1,p_mle/beta);
 # credal_minimax=p_high. TWO reward-CVaR-minimax agents (cvar_agent.py, budget-augmented value
-# iteration): cvar_minimax plans against the worst-case credal prob p_high, cvar_mle against the single
-# MLE distribution p_mle.
+# iteration): cvar_minimax plans against the worst case of the credal intervals [p_low, p_high],
+# cvar_mle against the single MLE distribution p_mle.
 # Tuned EV-GOOD regime everywhere: the hazardous shortcut is worth it on average but tail-risky. MLE
 # always takes it (best mean, worst CVaR); credal_minimax avoids while under-observed then ALIGNS WITH
 # THE MLE; aleatoric/cvar_mle cross at low data then avoid; cvar_minimax always detours.
@@ -15,12 +16,14 @@ eval:
   n_episodes: 1000         # test-time rollouts of each final policy under the true hazard
 
 settings:
-  # Main-paper setting: the original small map, 4-action car. Values verbatim from the pre-settings
-  # config, so the published figure is reproducible.
+  # Main-paper setting: the original small map, 4-action car.
   default:
     world: default
     n_seeds: 150
-    n_case: 500             # every non-hazard cell well observed -> its p_high ~ 0 (no detour funnel)
+    n_case: 1000            # every non-hazard cell well observed: its residual p_high ~ 1.9/n_case
+                            # compounds over the 25 cells of the detour to a worst-case crash prob
+                            # of ~0.046, well below beta. At 500 it is ~0.09 and the worst-case CVaR
+                            # of the detour falls below the shortcut's (break-even n_case ~ 650).
     alpha: 0.15             # credal-set width (ONLY affects credal); controls how much data credal
                             # needs before p_high drops below q* and it aligns with the MLE.
     p_hazard: 0.1           # true crash probability of each hazard cell
@@ -35,10 +38,9 @@ settings:
     # bars are comparable across scenarios (k*p is what the point-estimate baselines react to).
     k_hazard_values: [1, 2, 3, 4, 6, 8, 13, 20, 30, 40, 50]
     snapshot_k: [1, 4, 8, 20]  # hazard-observation counts at which to store road route snapshots
-    # reward-CVaR agents: the VaR threshold v is calibrated on a disjoint hold-out to minimise the
-    # realised population CVaR of the reward.
-    cvar_holdout_seeds: 20
-    cvar_num_grid: 20          # grid points for the hold-out v calibration
+    # reward-CVaR agents: the VaR threshold v is optimised with the policy, scanned over the
+    # attainable costs in steps of cvar_v_step (1 = every integer cost, exact).
+    cvar_v_step: 1
     plot_path: "plots/credal_driving_curve.pdf"
 
   # Appendix setting 1: 100x120 world, 8-action car (diagonals), two blob-shaped mountains with a
@@ -64,6 +66,5 @@ settings:
     # figure's snapshot anchors (108 -> 90, 417 -> 400) -- log-uniformity is preserved.
     k_hazard_values: [1, 8, 17, 25, 33, 50, 67, 90, 167, 250, 333, 400]
     snapshot_k: [1, 8, 67, 90, 167, 400]  # store extra candidates; the figure picks three
-    cvar_holdout_seeds: 10  # calibration is the big world's hot loop; 10x15 keeps runs tractable
-    cvar_num_grid: 15
+    cvar_v_step: 1
     plot_path: "plots/credal_driving_twin_peaks.pdf"

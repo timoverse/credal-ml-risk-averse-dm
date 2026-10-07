@@ -29,7 +29,7 @@ def crash_belief(
 
     Args:
         rule: One of AGENTS.
-        grids: dict with the p_mle and p_high grids (from CountModel.predict_cell_grid).
+        grids: dict with the p_mle and p_high grids (among those of CountModel.predict_cell_grid).
         beta: CVaR tail level for aleatoric_cvar.
 
     Returns:
